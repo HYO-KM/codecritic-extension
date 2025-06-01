@@ -1,0 +1,17 @@
+{
+  "manifest_version": 3,
+  "name": "CodeCritic",
+  "version": "1.0",
+  "description": "AIがPull Requestをレビューします",
+  "permissions": ["scripting", "activeTab"],
+  "host_permissions": ["https://github.com/*"],
+  "content_scripts": [
+    {
+      "matches": ["https://github.com/*/pull/*"],
+      "js": ["content.js"]
+    }
+  ],
+  "action": {
+    "default_title": "CodeCritic"
+  }
+}
