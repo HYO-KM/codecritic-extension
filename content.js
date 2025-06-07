@@ -127,8 +127,33 @@ ${diffText}
   }
 }
 
+
+async function displayCommentModal(aiComment, prOwner, prRepo, prPullNumber, githubToken) {
+  const modalOverlay = document.getElementById('codecritic-modal-overlay');
+  const commentTextarea = document.getElementById('codecritic-comment-textarea');
+  const postButton = document.getElementById('codecritic-post-button');
+  const cancelButton = document.getElementById('codecritic-cancel-button');
+
+  commentTextarea.value = aiComment;
+  modalOverlay.style.display = 'flex';
+
+  postButton.onclick = async () => {
+    const finalComment = commentTextarea.value;
+    await postCommentToPR(prOwner, prRepo, prPullNumber, finalComment, githubToken);
+    modalOverlay.style.display = 'none'; 
+  };
+
+  // 「キャンセル」ボタンがクリックされたときの処理
+  cancelButton.onclick = () => {
+    modalOverlay.style.display = 'none';
+  };
+}
+
+
+
 // GitHubページにAIレビューボタンを追加する関数
 function addReviewButton() {
+  // 既にボタンがある場合は処理しない
   if (document.getElementById('codecritic-review-button')) return;
 
   const target = document.querySelector('.gh-header-actions');
@@ -141,56 +166,68 @@ function addReviewButton() {
   button.style.marginLeft = '10px';
 
   button.onclick = async () => {
-    // まずPR情報を取得
+    // PR情報を取得
     const prInfo = getPRInfoFromURL();
     if (!prInfo) {
       alert("PR情報がURLから取得できませんでした。");
       return;
     }
 
-    // ★GitHubトークンの取得（ストレージからの取得に置き換える前の暫定措置）★
-    const githubToken = prompt("GitHubのPersonal Access Tokenを入力してください（開発用）");
+    const storedData = await new Promise((resolve) => {
+      chrome.storage.local.get(['geminiApiKey', 'githubToken'], resolve);
+    });
+
+    const geminiApiKey = storedData.geminiApiKey;
+    const githubToken = storedData.githubToken;
+
+    if (!geminiApiKey) {
+      alert("Gemini APIキーが設定されていません。");
+      return;
+    }
     if (!githubToken) {
-      alert("GitHubトークンが入力されませんでした。");
+      alert("GitHub Personal Access Tokenが設定されていません。");
       return;
     }
 
-    // ★変更点: GitHub APIから差分テキストを取得する★
-    // .js-file-content .blob-code-inner からのDOM取得は不要になります
     const diffText = await getPRDiff(prInfo.owner, prInfo.repo, prInfo.pullNumber, githubToken);
     if (!diffText) {
-      // getPRDiff内でエラーメッセージが表示されているのでここではreturnのみ
-      return;
+      return; 
     }
 
-    // ★Gemini APIキーの取得（ストレージからの取得に置き換える前の暫定措置）★
-    const geminiApiKey = prompt("Gemini APIキーを入力してください（開発用）");
-    if (!geminiApiKey) {
-      alert("Gemini APIキーが入力されませんでした。");
-      return;
-    }
-
-    // AIレビュー生成
     const aiComment = await generateReviewComment(diffText, geminiApiKey);
     if (!aiComment) {
       return;
     }
 
-    // AIコメントをGitHubに投稿
-    await postCommentToPR(prInfo.owner, prInfo.repo, prInfo.pullNumber, aiComment, githubToken);
+    displayCommentModal(aiComment, prInfo.owner, prInfo.repo, prInfo.pullNumber, githubToken);
   };
 
   target.appendChild(button);
+
+  if (!document.getElementById('codecritic-modal-overlay')) {
+    const modalHTML = `
+      <div id="codecritic-modal-overlay" style="position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.7); display: none; justify-content: center; align-items: center; z-index: 9999;">
+        <div id="codecritic-modal-content" style="background: white; padding: 20px; border-radius: 8px; width: 600px; max-width: 90%; box-shadow: 0 4px 8px rgba(0,0,0,0.2);">
+          <h3 style="margin-top: 0;">AIレビューコメントの確認・編集</h3>
+          <textarea id="codecritic-comment-textarea" style="width: 100%; height: 200px; margin-bottom: 15px; padding: 10px; border: 1px solid #ccc; border-radius: 4px; resize: vertical; font-size: 1em;"></textarea>
+          <div style="display: flex; justify-content: flex-end; gap: 10px;">
+            <button id="codecritic-post-button" style="background-color: #28a745; color: white; padding: 8px 15px; border: none; border-radius: 4px; cursor: pointer;">GitHubに投稿</button>
+            <button id="codecritic-cancel-button" style="background-color: #dc3545; color: white; padding: 8px 15px; border: none; border-radius: 4px; cursor: pointer;">キャンセル</button>
+          </div>
+        </div>
+      </div>
+    `;
+    document.body.insertAdjacentHTML('beforeend', modalHTML);
+  }
 }
 
 // 差分表示が読み込まれるのを監視してボタン追加
 const observer = new MutationObserver(() => {
-  const diffContent = document.querySelector('.js-file-content .blob-code-inner'); // このセレクタ自体は残してOK
+  const diffContent = document.querySelector('.js-file-content .blob-code-inner');
   if (diffContent) {
     addReviewButton();
     observer.disconnect(); // ボタンが追加されたら監視を停止
   }
 });
-
 
 observer.observe(document.body, { childList: true, subtree: true });
