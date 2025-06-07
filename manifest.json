@@ -13,6 +13,7 @@
     }
   ],
   "action": {
-    "default_title": "CodeCritic"
+    "default_title": "CodeCritic",
+    "default_popup": "popup.html"
   }
 }
