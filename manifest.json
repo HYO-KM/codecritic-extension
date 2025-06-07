@@ -3,8 +3,9 @@
   "name": "CodeCritic",
   "version": "1.0",
   "description": "AIがPull Requestをレビューします",
-  "permissions": ["scripting", "activeTab"],
-  "host_permissions": ["https://github.com/*"],
+  "permissions": ["scripting", "activeTab", "storage"],
+
+  "host_permissions": ["https://github.com/*", "https://generativelanguage.googleapis.com/*"],
   "content_scripts": [
     {
       "matches": ["https://github.com/*/pull/*"],

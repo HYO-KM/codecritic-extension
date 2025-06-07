@@ -1,3 +1,4 @@
+// GitHubのURLからPR情報を取得する関数
 function getPRInfoFromURL() {
   const match = window.location.pathname.match(/\/([^\/]+)\/([^\/]+)\/pull\/(\d+)/);
   if (!match) return null;
@@ -8,7 +9,7 @@ function getPRInfoFromURL() {
   };
 }
 
-
+// GitHubのPRにコメントを投稿する関数
 async function postCommentToPR(owner, repo, pullNumber, commentBody, githubToken) {
   const url = `https://api.github.com/repos/${owner}/${repo}/issues/${pullNumber}/comments`;
 
@@ -34,70 +35,105 @@ async function postCommentToPR(owner, repo, pullNumber, commentBody, githubToken
 }
 
 
-async function generateReviewComment(diffText) {
-  const apiKey = prompt("OpenAI APIキーを入力してください（開発用）");
-  if (!apiKey) return;
+async function getPRDiff(owner, repo, pullNumber, githubToken) {
+  const url = `https://api.github.com/repos/${owner}/${repo}/pulls/${pullNumber}.diff`; // .diff を指定することで差分を取得
+
+  try {
+    const response = await fetch(url, {
+      method: 'GET',
+      headers: {
+        'Authorization': `Bearer ${githubToken}`,
+        'Accept': 'application/vnd.github.v3.diff', // Diff形式をリクエスト
+      }
+    });
+
+    if (!response.ok) {
+      console.error("GitHub Diff取得失敗:", await response.text());
+      alert("PRの差分取得に失敗しました。GitHubトークンが正しいか、権限があるか確認してください。");
+      return null;
+    }
+
+    const diffText = await response.text(); // テキスト形式で差分を取得
+    console.log("GitHub APIから取得した差分:", diffText);
+    return diffText;
+  } catch (error) {
+    console.error("ネットワークまたはGitHub API呼び出しエラー:", error);
+    alert("GitHub APIから差分取得中にエラーが発生しました。ネットワーク接続を確認してください。");
+    return null;
+  }
+}
+
+// Gemini APIを使用してレビューコメントを生成する関数
+async function generateReviewComment(diffText, apiKey) {
+
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`; // ★変更点: GeminiのエンドポイントとAPIキーをURLに含める
 
   const promptText = `
 あなたはプロのソフトウェアエンジニアです。以下はGitHubのPull Requestの差分です。
 この変更に対してレビューコメントをいくつか日本語で出してください。
 具体的に改善点・バグ・設計の問題があれば挙げてください。
+コードの品質向上に役立つ具体的な指摘を心がけてください。
 
 --- 差分ここから ---
 ${diffText}
 --- 差分ここまで ---
 `;
 
-  const response = await fetch('https://api.openai.com/v1/chat/completions', {
-    method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${apiKey}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      model: 'gpt-3.5-turbo', // ← 必要に応じてgpt-3.5-turboに変更
-      messages: [{ role: 'user', content: promptText }],
-      temperature: 0.7
-    })
-  });
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        
+        contents: [
+          {
+            role: 'user',
+            parts: [
+              { text: promptText }
+            ]
+          }
+        ],
+        generationConfig: {
+          temperature: 0.7,
+        },
+      })
+    });
 
-  if (!response.ok) {
-    console.error("OpenAI APIエラー:", await response.text());
-    alert("レビュー生成に失敗しました");
+    if (!response.ok) {
+      const errorData = await response.json();
+      console.error("Gemini APIエラー:", errorData);
+      alert("レビュー生成に失敗しました: " + (errorData.error?.message || '不明なエラー'));
+      return;
+    }
+
+    const data = await response.json();
+    // Gemini APIのレスポンスからコメントを取得する方法
+    const comment = data.candidates?.[0]?.content?.parts?.[0]?.text;
+
+    if (!comment) {
+      console.warn("Gemini APIからコメントが取得できませんでした。", data);
+      alert("AIコメントの生成に失敗しました。AIの返答が空か、期待する形式ではありませんでした。");
+      return;
+    }
+
+    console.log("AIレビューコメント:", comment);
+    return comment;
+  } catch (error) {
+    console.error("ネットワークまたはAPI呼び出しエラー:", error);
+    alert("レビュー生成中にエラーが発生しました。ネットワーク接続を確認してください。");
     return;
   }
-
-  const data = await response.json();
-  const comment = data.choices?.[0]?.message?.content;
-  console.log("AIレビューコメント:", comment);
-  return comment; // ← これを忘れずに！
 }
 
-
-
-// async function getDiffText() {
-//   const diffElements = document.querySelectorAll('.js-file-content .blob-code-inner');
-//   if (!diffElements.length) {
-//     alert("差分コードが見つかりません");
-//     return;
-//   }
-
-//   const diffText = Array.from(diffElements)
-//   .map(el => el.innerText)
-//   .join('\n');
-//   console.log("差分:", diffText);
-
-//   await generateReviewComment(diffText);
-// }
-
+// GitHubページにAIレビューボタンを追加する関数
 function addReviewButton() {
-  // 既にボタンがある場合は処理しない
   if (document.getElementById('codecritic-review-button')) return;
 
   const target = document.querySelector('.gh-header-actions');
   if (!target) return;
 
-  // ✅ ここで button を定義
   const button = document.createElement('button');
   button.id = 'codecritic-review-button';
   button.innerText = 'AIレビュー生成';
@@ -105,38 +141,56 @@ function addReviewButton() {
   button.style.marginLeft = '10px';
 
   button.onclick = async () => {
-  const diffElements = document.querySelectorAll('.js-file-content .blob-code-inner');
-  const diffText = Array.from(diffElements).map(el => el.innerText).join('\n');
+    // まずPR情報を取得
+    const prInfo = getPRInfoFromURL();
+    if (!prInfo) {
+      alert("PR情報がURLから取得できませんでした。");
+      return;
+    }
 
-  const aiComment = await generateReviewComment(diffText);
-  // generateReviewComment 関数の最後に return を追加
-  return aiComment;
+    // ★GitHubトークンの取得（ストレージからの取得に置き換える前の暫定措置）★
+    const githubToken = prompt("GitHubのPersonal Access Tokenを入力してください（開発用）");
+    if (!githubToken) {
+      alert("GitHubトークンが入力されませんでした。");
+      return;
+    }
 
-  if (!aiComment) return;
+    // ★変更点: GitHub APIから差分テキストを取得する★
+    // .js-file-content .blob-code-inner からのDOM取得は不要になります
+    const diffText = await getPRDiff(prInfo.owner, prInfo.repo, prInfo.pullNumber, githubToken);
+    if (!diffText) {
+      // getPRDiff内でエラーメッセージが表示されているのでここではreturnのみ
+      return;
+    }
 
-  const prInfo = getPRInfoFromURL();
-  if (!prInfo) {
-    alert("PR情報がURLから取得できませんでした。");
-    return;
-  }
+    // ★Gemini APIキーの取得（ストレージからの取得に置き換える前の暫定措置）★
+    const geminiApiKey = prompt("Gemini APIキーを入力してください（開発用）");
+    if (!geminiApiKey) {
+      alert("Gemini APIキーが入力されませんでした。");
+      return;
+    }
 
-  const githubToken = prompt("GitHubのPersonal Access Tokenを入力してください（開発用）");
-  if (!githubToken) return;
+    // AIレビュー生成
+    const aiComment = await generateReviewComment(diffText, geminiApiKey);
+    if (!aiComment) {
+      return;
+    }
 
-  await postCommentToPR(prInfo.owner, prInfo.repo, prInfo.pullNumber, aiComment, githubToken);
-};
-
+    // AIコメントをGitHubに投稿
+    await postCommentToPR(prInfo.owner, prInfo.repo, prInfo.pullNumber, aiComment, githubToken);
+  };
 
   target.appendChild(button);
 }
 
 // 差分表示が読み込まれるのを監視してボタン追加
 const observer = new MutationObserver(() => {
-  const diffContent = document.querySelector('.js-file-content .blob-code-inner');
+  const diffContent = document.querySelector('.js-file-content .blob-code-inner'); // このセレクタ自体は残してOK
   if (diffContent) {
     addReviewButton();
-    observer.disconnect();
+    observer.disconnect(); // ボタンが追加されたら監視を停止
   }
 });
+
 
 observer.observe(document.body, { childList: true, subtree: true });
